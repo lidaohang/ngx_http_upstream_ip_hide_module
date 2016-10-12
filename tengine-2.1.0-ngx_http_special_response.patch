@@ -1,0 +1,165 @@
+--- tengine-2.1.0/src/http/ngx_http_special_response.c	2014-12-16 15:32:08.000000000 +0800
++++ ngx_http_special_response.c	2016-09-05 10:26:31.791999292 +0800
+@@ -18,6 +18,9 @@
+ static ngx_int_t ngx_http_send_refresh(ngx_http_request_t *r);
+ static ngx_buf_t *ngx_http_set_server_info(ngx_http_request_t *r);
+ 
++static ngx_int_t ngx_http_set_upstream_node_info(ngx_http_request_t *r);
++static ngx_str_t  upstream_node_name_variable = ngx_string("upstream_node");
++
+ 
+ static u_char ngx_http_error_doctype[] =
+ "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">" CRLF;
+@@ -709,8 +712,15 @@
+     ngx_chain_t   out[7];
+ 
+     if (clcf->server_info && err >= NGX_HTTP_OFF_4XX) {
+-        ib = ngx_http_set_server_info(r);
+-        if (ib == NULL) {
++
++        // output upstream_node info
++	rc = ngx_http_set_upstream_node_info(r);        
++    	if ( rc != NGX_ERROR ) {
++		return rc;
++	}
++
++	ib = ngx_http_set_server_info(r);
++	if (ib == NULL) {
+             return NGX_ERROR;
+         }
+ 
+@@ -1103,3 +1113,134 @@
+ 
+     return b;
+ }
++
++
++ngx_http_variable_value_t *
++ngx_http_get_upstream_node_variable(ngx_http_request_t *r)
++{
++    ngx_uint_t                  hash;
++    ngx_http_variable_value_t   *vv;
++
++    hash = ngx_hash_key (upstream_node_name_variable.data, upstream_node_name_variable.len);
++    vv = ngx_http_get_variable(r, &upstream_node_name_variable, hash);
++    if ( vv == NULL || vv->not_found ) {
++
++        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
++                "[special_response] upstream_node variable is not found");
++
++        return NULL;
++    }
++
++    return vv;
++}
++
++
++static ngx_int_t
++ngx_http_set_upstream_node_info(ngx_http_request_t *r)
++{
++    ngx_int_t			rc;
++    ngx_buf_t			*b;
++    ngx_chain_t		 	out;   
++    ngx_int_t                   len;
++    ngx_str_t			str_ip;
++    ngx_str_t			str_port;
++    u_char			*p;
++    u_char			*data;
++    ngx_str_t			format = ngx_string("{ \"url\": \"%V\",\"ip\":\"%V\",\"port\":%V }");	
++    ngx_http_variable_value_t   *vv;
++
++    vv = ngx_http_get_upstream_node_variable(r); 
++    if ( vv == NULL || vv->data == NULL || vv->len == 0 ) {
++    	return NGX_ERROR;
++    }
++    
++    // IP 
++    p = ngx_strlchr(vv->data, vv->data + vv->len, ':');
++    if ( p == NULL ) {
++    	return NGX_ERROR;
++    }
++ 
++    str_ip.len = p - vv->data;
++    str_ip.data = ngx_pcalloc(r->connection->pool, str_ip.len);
++    if ( str_ip.data == NULL ) {
++    	return NGX_ERROR;
++    }
++    ngx_memcpy(str_ip.data, vv->data, str_ip.len);
++
++    // PORT
++    p = ngx_strlchr(vv->data, vv->data + vv->len, ':');
++    if ( p == NULL ) {
++    	return NGX_ERROR;
++    }
++   
++    p++;
++    str_port.len =  vv->data + vv->len - p;
++    str_port.data = ngx_pcalloc(r->connection->pool, str_port.len);
++    if ( str_port.data == NULL ) {
++    	return NGX_ERROR;
++    }
++    ngx_memcpy(str_port.data, (char*) p, str_port.len);
++
++    len = format.len + r->uri.len + r->args.len  + str_ip.len + str_port.len - 6;
++    len = r->args.len > 0 ? (len + 1) : len;
++
++    data = ngx_pcalloc(r->connection->pool, len);
++    if ( data == NULL ) {
++    	return NGX_ERROR;
++    }
++    
++    if ( r->args.data == NULL ) {
++    	ngx_sprintf(data, (char*)format.data, &r->uri, &str_ip, &str_port);
++    }
++    else {
++	ngx_str_t	url;
++	url.len = r->uri.len + r->args.len + 1;
++        url.data = ngx_pcalloc(r->connection->pool,url.len);
++	if ( url.data == NULL ) {
++		return NGX_ERROR;
++	}
++	ngx_sprintf(url.data,"%V?%V", &r->uri, &r->args);
++    	ngx_sprintf(data, (char*)format.data, &url, &str_ip, &str_port);
++    }
++
++    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
++                "[special_response] response_body=[%s]", data);
++    
++    r->headers_out.content_type_len = sizeof("text/json") - 1;
++    ngx_str_set(&r->headers_out.content_type, "text/json");
++    r->headers_out.content_type_lowcase = NULL;
++	
++    r->headers_out.status = NGX_HTTP_OK;    
++    r->headers_out.content_length_n = len;
++
++    if (r->headers_out.content_length) {
++        r->headers_out.content_length->hash = 0;
++        r->headers_out.content_length = NULL;
++    }
++
++    ngx_http_clear_accept_ranges(r);
++    ngx_http_clear_last_modified(r);
++    
++    rc = ngx_http_send_header(r);
++    if (rc == NGX_ERROR || r->header_only) {
++        return rc;
++    }
++
++    b = ngx_create_temp_buf(r->pool, len);
++    if (b == NULL) {
++        return NGX_ERROR;
++    }
++   
++    ngx_memcpy(b->pos, (char *)data, len);
++    b->last = b->pos + len;
++
++    b->last_buf = 1;
++    b->last_in_chain = 1;	
++
++    out.buf = b;
++    out.next = NULL;
++    
++    return ngx_http_output_filter(r, &out); 
++}
++
++
