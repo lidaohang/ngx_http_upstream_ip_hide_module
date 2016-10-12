@@ -1,5 +1,5 @@
 ### 功能 
-查询请求URL的Upstream上游服务请求的server
+查询请求URL的Upstream上游服务器
 
 
 ### 安装方式(默认二进制已经安装好)
