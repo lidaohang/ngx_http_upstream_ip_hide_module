@@ -4,9 +4,9 @@
 
 ### 安装方式(默认二进制已经安装好)
 ```
-patch -p1 < ../tengine-2.1.0-ngx_http_special_response.patch
+patch -p1 < ngx_http_upstream_ip_hide_module/tengine-2.1.0-ngx_http_special_response.patch
 
-./configure --prefix=/usr/local/nginx  --add-module=modules/ngx_http_upstream_ip_hide_module
+./configure --prefix=/usr/local/nginx  --add-module=ngx_http_upstream_ip_hide_module
 
 make
 make install
