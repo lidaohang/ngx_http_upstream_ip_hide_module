@@ -20,7 +20,7 @@ http {
     ...
     server_info on;
     ...
-    
+   
     server {
          listen  80;
          
@@ -38,4 +38,11 @@ upstream backup_server {
      server 127.0.0.1:8001;
      ip_hide;
 }
+```
+
+
+3. 测试
+curl 127.0.0.1:80/test
+```
+{"url": "test","ip\":\"127.0.0.1\",\"port\":8000 }
 ```
